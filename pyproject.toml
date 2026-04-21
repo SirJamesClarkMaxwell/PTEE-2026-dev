@@ -1,0 +1,12 @@
+[project]
+name = "ptee-2026"
+version = "0.1.0"
+description = "Manim animations and slides examples"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "manim>=0.20",
+    "manim-slides>=5.0",
+    "pyqt6>=6.11.0",
+    "shapely>=2.0",
+]
