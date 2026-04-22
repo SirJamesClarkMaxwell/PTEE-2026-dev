@@ -1,102 +1,4 @@
-from manim import *
-from manim_slides import Slide
-from collections.abc import Iterable
-from contextlib import contextmanager
-from typing import Generator, List, Dict
-import io
-import numpy as np
-import tokenize
-
-ENABLE_SLIDES = False
-VIDEO = True
-
-BaseScene = Slide if ENABLE_SLIDES else Scene
-
-
-class TransformMatchingCode(TransformMatchingTex):
-    @staticmethod
-    def get_mobject_parts(mobject: Mobject) -> list[Mobject]:
-        if isinstance(mobject, (Group, VGroup)):
-            parts = []
-            for submobject in mobject.submobjects:
-                parts.extend(TransformMatchingCode.get_mobject_parts(submobject))
-            return parts
-        if hasattr(mobject, "match_parts"):
-            return mobject.match_parts
-        return TransformMatchingTex.get_mobject_parts(mobject)
-
-    @staticmethod
-    def get_mobject_key(mobject: Mobject) -> str:
-        return mobject.tex_string
-
-
-class Base(BaseScene):
-    default_scene_width = 8
-    default_scene_height = 4.5
-    default_scene_shift = UP * 0.35
-    default_corner_radius = 0.2
-
-    def wait_or_slide(self):
-        self.next_slide() if ENABLE_SLIDES else self.wait()
-
-    @contextmanager
-    def new_section(
-        self,
-        name: str = "unnamed",
-        section_type: str = DefaultSectionType.NORMAL,
-        skip_animations: bool = False,
-    ) -> Generator[None, None, None]:
-        print(f"Entering section: {name}")
-        self.next_section(name, section_type, skip_animations)
-        yield
-        print(f"Exiting section: {name}")
-
-    def default_scene(self) -> RoundedRectangle:
-        return RoundedRectangle(
-            width=self.default_scene_width,
-            height=self.default_scene_height,
-            corner_radius=self.default_corner_radius,
-            stroke_color=WHITE,
-            fill_color=BLACK,
-            fill_opacity=0.05,
-        ).shift(self.default_scene_shift)
-
-    def play_timeline(self, timeline: dict[float, Animation | Iterable[Animation]]):
-        previous_t = 0
-
-        for t, timeline_item in sorted(timeline.items()):
-            to_wait = t - previous_t
-            if to_wait > 0:
-                self.wait(to_wait)
-
-            after_play = None
-            animations = timeline_item() if callable(timeline_item) else timeline_item
-            if (
-                isinstance(animations, tuple)
-                and len(animations) == 2
-                and callable(animations[1])
-            ):
-                animations, after_play = animations
-            if isinstance(animations, Animation):
-                animations = [animations]
-
-            self.play(*animations)
-            if after_play is not None:
-                after_play()
-            previous_t = t + max(animation.run_time for animation in animations)
-
-    def build_timeline(
-        self,
-        steps: Iterable,
-        animation_builder,
-        start_time: float = 0,
-        step_time: float = 2,
-    ) -> dict[float, Animation | Iterable[Animation]]:
-        return {
-            start_time + index * step_time: lambda step=step: animation_builder(step)
-            for index, step in enumerate(steps)
-        }
-
+from commons import *
 
 class WhatIsAScene(Base):
     def construct(self) -> None:
@@ -244,7 +146,7 @@ class SimplePositioning(Base):
             tokenize.OP: GREY_B,
         }
         direction_names = {"UP", "DOWN", "LEFT", "RIGHT", "UL", "UR", "DL", "DR"}
-        object_names = {"dot", "scene", "plane", "animate",".","(",")"}
+        object_names = {"dot", "scene", "plane", "animate", ".", "(", ")"}
         method_names = {"move_to", "get_center", "get_critical_point", "c2p"}
 
         code = Text(command, font="Consolas", font_size=24)
@@ -279,12 +181,10 @@ class SimplePositioning(Base):
         if c2p_start != -1:
             args_start = c2p_start + len("c2p(")
             args_end = command.find(")", args_start)
-            print(command, args_start, args_end)
-            print(command[args_start:args_end])
-            code[args_start:args_end-1].set_color(RED)
+            code[args_start : args_end - 1].set_color(RED)
             if args_end is not None:
                 code[args_end].set_color(WHITE)
-            comma = command.find(",",c2p_start)
+            comma = command.find(",", c2p_start)
             code[comma].set_color(WHITE)
 
         code[-2:].set_color(BLUE_B)
@@ -452,7 +352,7 @@ class SimplePositioning(Base):
             self.play(FadeIn(plane))
             self.wait_or_slide()
 
-        with self.new_section("Move to coordinates", skip_animations=False):
+        with self.new_section("Move to coordinates", skip_animations=True):
 
             coordinate_steps = {
                 "origin": (0, 0),
@@ -469,7 +369,7 @@ class SimplePositioning(Base):
             # Initialize the first coordinate command separately to avoid
             # a noisy first transition from get_center() to c2p(...).
             coordinate_items = list(coordinate_map.values())
-            first_coordinates, first_command_text = coordinate_items[0]
+            _, first_command_text = coordinate_items[0]
             first_command_animation, first_next_command = self.update_command(
                 command["mobject"], first_command_text, run_time=0.6
             )
@@ -501,6 +401,30 @@ class SimplePositioning(Base):
             )
 
             self.wait_or_slide()
+
+            self.play(
+                LaggedStart(
+                    FadeOut(title),
+                    FadeOut(point_labels),
+                    FadeOut(point_dots),
+                    FadeOut(command["mobject"]),
+                    FadeOut(moving_dot),
+                    lag_ratio=0.15,
+                ),
+                run_time=1.4,
+            )
+            self.play(
+                LaggedStart(*[FadeOut(it) for it in plane], lag_ratio=0.02),
+                run_time=1.2,
+            )
+            self.play(
+                scene_box.animate.scale(1.2),
+                run_time=1.0,
+            )
+            self.wait_or_slide()
+        
+        with self.new_section("Object control points"):
+            pass
 
 
 def main():
