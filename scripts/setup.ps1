@@ -1,213 +1,292 @@
-# Setup and Test Script for Windows (PowerShell)
+param(
+    [string]$PythonVersion = '3.13',
+    [switch]$SkipLaTeX,
+    [switch]$ForceRecreateVenv
+)
 
-param()
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
-$green = 'Green'
-$red = 'Red'
-$yellow = 'Yellow'
-$cyan = 'Cyan'
+$script:StageCounter = 0
+$script:ProjectRoot = $null
+$script:LogFile = $null
 
-function Write-Success([string]$Message) {
-    Write-Host "[OK] $Message" -ForegroundColor $green
-}
+function Refresh-Path {
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 
-function Write-Error-Custom([string]$Message) {
-    Write-Host "[ERROR] $Message" -ForegroundColor $red
-}
-
-function Write-Warning-Custom([string]$Message) {
-    Write-Host "[WARNING] $Message" -ForegroundColor $yellow
-}
-
-function Check-UV-Installed {
-    try {
-        $version = (& uv --version 2>&1)
-        Write-Success "uv is already installed: $version"
-        return $true
-    }
-    catch {
-        Write-Error-Custom "uv is not installed"
-        return $false
-    }
-}
-
-function Install-UV {
-    Write-Host "`nInstalling uv from official source..." -ForegroundColor $cyan
-    try {
-        powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
-        Write-Success "uv installed successfully"
-        return $true
-    }
-    catch {
-        Write-Error-Custom "Failed to install uv"
-        return $false
-    }
-}
-
-function Test-LaTeX-Installed {
-    foreach ($commandName in @('latex', 'pdflatex', 'dvisvgm')) {
-        if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
-            return $false
-        }
+    if ([string]::IsNullOrWhiteSpace($machinePath) -and [string]::IsNullOrWhiteSpace($userPath)) {
+        return
     }
 
-    return $true
-}
-
-function Install-LaTeX {
-    Write-Host "`nInstalling LaTeX support..." -ForegroundColor $cyan
-
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "Using winget to install MiKTeX..." -ForegroundColor $yellow
-        & winget install --id MiKTeX.MiKTeX -e --source winget --accept-package-agreements --accept-source-agreements 2>&1 | ForEach-Object { Write-Host $_ }
-        if ($LASTEXITCODE -eq 0) {
-            return $true
-        }
-
-        Write-Warning-Custom "winget install failed; please install MiKTeX manually from https://miktex.org/download"
-        return $false
+    if ([string]::IsNullOrWhiteSpace($userPath)) {
+        $env:Path = $machinePath
     }
-
-    Write-Warning-Custom "winget is not available; please install MiKTeX manually from https://miktex.org/download"
-    return $false
+    elseif ([string]::IsNullOrWhiteSpace($machinePath)) {
+        $env:Path = $userPath
+    }
+    else {
+        $env:Path = "$machinePath;$userPath"
+    }
 }
 
 function Get-ProjectRoot {
-    $scriptPath = $PSScriptRoot
-    $projectRoot = Split-Path -Parent $scriptPath
-    return $projectRoot
-}
+    $candidates = @(
+        (Split-Path -Parent $PSScriptRoot),
+        $PSScriptRoot,
+        (Get-Location).Path
+    ) | Select-Object -Unique
 
-# Get project root
-$projectRoot = Get-ProjectRoot
-Write-Host "`nProject root: $projectRoot" -ForegroundColor $cyan
-Set-ExecutionPolicy -ExecutionPolicy ByPass -Scope CurrentUser
-
-# Step 1: Check uv
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 1: Checking if uv is installed" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
-
-if (-not (Check-UV-Installed)) {
-    Write-Host "`nInstalling uv..." -ForegroundColor $cyan
-    if (-not (Install-UV)) {
-        Write-Error-Custom "Failed to install uv"
-        exit 1
+    foreach ($candidate in $candidates) {
+        if (-not $candidate) { continue }
+        if (Test-Path (Join-Path $candidate '.git')) { return $candidate }
+        if (Test-Path (Join-Path $candidate 'pyproject.toml')) { return $candidate }
+        if (Test-Path (Join-Path $candidate 'requirements.txt')) { return $candidate }
+        if (Test-Path (Join-Path $candidate 'setup.py')) { return $candidate }
     }
-    
-    # Refresh PATH after installation
-    Write-Host "Refreshing PATH..." -ForegroundColor $yellow
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+    return (Split-Path -Parent $PSScriptRoot)
 }
 
-# Step 2: Update project
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 2: Ensuring Python is installed via uv" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
+function Initialize-Logging {
+    $logDir = Join-Path $script:ProjectRoot 'logs'
+    if (-not (Test-Path $logDir)) {
+        New-Item -ItemType Directory -Path $logDir | Out-Null
+    }
 
-Push-Location $projectRoot
-Write-Host "Running: uv python install" -ForegroundColor Yellow
-& uv python install 2>&1 | ForEach-Object { Write-Host $_ }
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning-Custom "Python installation via uv had issues, but continuing..."
-}
-Pop-Location
-
-# Step 3: Update project
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 3: Updating project with uv sync" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
-
-Push-Location $projectRoot
-Write-Host "Running: uv sync" -ForegroundColor Yellow
-& uv sync 2>&1 | ForEach-Object { Write-Host $_ }
-Pop-Location
-
-# Step 4: Install dependencies
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 4: Installing dependencies and manim-physics" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
-
-Push-Location $projectRoot
-Write-Host "Running: uv add manim manim-slides PyQt6 --upgrade" -ForegroundColor Yellow
-& uv add manim manim-slides PyQt6 --upgrade 2>&1 | ForEach-Object { Write-Host $_ }
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error-Custom "Failed to install packages"
-    Pop-Location
-    exit 1
+    $timestamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
+    $script:LogFile = Join-Path $logDir "setup_$timestamp.log"
+    New-Item -ItemType File -Path $script:LogFile -Force | Out-Null
 }
 
-Write-Success "Dependencies installed"
+function Write-Log {
+    param(
+        [string]$Level,
+        [string]$Message,
+        [ConsoleColor]$Color = [ConsoleColor]::White
+    )
 
-if (-not (Test-Path (Join-Path $projectRoot "manim-physics"))) {
-    Write-Host "Running: git clone https://github.com/sjcmdev/manim-physics.git" -ForegroundColor Yellow
-    & git clone https://github.com/sjcmdev/manim-physics.git 2>&1 | ForEach-Object { Write-Host $_ }
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    $line = "[$timestamp] [$Level] $Message"
+
+    if ($script:LogFile) {
+        Add-Content -Path $script:LogFile -Value $line
+    }
+
+    Write-Host $line -ForegroundColor $Color
 }
 
-$physicsPyproject = Join-Path $projectRoot "manim-physics\pyproject.toml"
-if (Test-Path $physicsPyproject) {
-    Write-Host "Patching manim-physics compatibility constraints" -ForegroundColor Yellow
-    $content = Get-Content $physicsPyproject -Raw
-    $content = $content -replace 'python = ">=3\.9,<3\.13"', 'python = ">=3.9"'
-    $content = $content -replace 'python = ">=3\.9,"', 'python = ">=3.9"'
-    $content = $content -replace 'manim = "~0\.18\.0"', 'manim = ">=0.20"'
-    Set-Content -Path $physicsPyproject -Value $content -NoNewline
+function Write-Info([string]$Message) { Write-Log -Level 'INFO' -Message $Message -Color Cyan }
+function Write-Ok([string]$Message) { Write-Log -Level ' OK ' -Message $Message -Color Green }
+function Write-Warn([string]$Message) { Write-Log -Level 'WARN' -Message $Message -Color Yellow }
+function Write-Fail([string]$Message) { Write-Log -Level 'FAIL' -Message $Message -Color Red }
+
+function Invoke-Stage {
+    param(
+        [string]$Name,
+        [scriptblock]$Action
+    )
+
+    $script:StageCounter++
+    Write-Host ''
+    Write-Info '============================================================'
+    Write-Info ('STEP {0}: {1}' -f $script:StageCounter, $Name)
+    Write-Info '============================================================'
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $Action
+        $sw.Stop()
+        Write-Ok ('{0} finished in {1:N1}s' -f $Name, $sw.Elapsed.TotalSeconds)
+    }
+    catch {
+        $sw.Stop()
+        Write-Fail ('{0} failed after {1:N1}s' -f $Name, $sw.Elapsed.TotalSeconds)
+        Write-Fail $_.Exception.Message
+        throw
+    }
 }
 
-Write-Host "Running: uv run python -m ensurepip --upgrade" -ForegroundColor Yellow
-& uv run python -m ensurepip --upgrade 2>&1 | ForEach-Object { Write-Host $_ }
-
-Write-Host "Running: uv run python -m pip install -e ./manim-physics" -ForegroundColor Yellow
-& uv run python -m pip install -e ./manim-physics 2>&1 | ForEach-Object { Write-Host $_ }
-
-if ($LASTEXITCODE -ne 0) {
-    Write-Error-Custom "Failed to install editable manim-physics"
-    Pop-Location
-    exit 1
+function Test-CommandAvailable([string]$CommandName) {
+    return $null -ne (Get-Command $CommandName -ErrorAction SilentlyContinue)
 }
 
-Write-Success "Editable manim-physics installed"
-Pop-Location
+function Invoke-LoggedCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [string]$Description = $null,
+        [switch]$AllowFailure
+    )
 
-# Step 5: Ensure LaTeX is available
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 5: Ensuring LaTeX is installed" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
-
-if (-not (Test-LaTeX-Installed)) {
-    if (-not (Install-LaTeX)) {
-        Write-Warning-Custom "LaTeX is still missing. Manim may fail until a TeX distribution is installed."
+    $quotedArgs = if ($Arguments.Count -gt 0) {
+        ($Arguments | ForEach-Object {
+            if ($_ -match '\s') { '"{0}"' -f $_ } else { $_ }
+        }) -join ' '
     }
     else {
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+        ''
+    }
+
+    if ($Description) {
+        Write-Info $Description
+    }
+    Write-Info ('> {0} {1}' -f $FilePath, $quotedArgs)
+
+    $oldNativePref = $null
+    $hadNativePref = $false
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+        $hadNativePref = $true
+        $oldNativePref = $global:PSNativeCommandUseErrorActionPreference
+        $global:PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    $oldErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    try {
+        & $FilePath @Arguments 2>&1 | ForEach-Object {
+            $text = $_.ToString()
+            if ($script:LogFile) {
+                Add-Content -Path $script:LogFile -Value $text
+            }
+            Write-Host $text
+        }
+
+        if (-not $AllowFailure -and $LASTEXITCODE -ne 0) {
+            throw ("Command failed with exit code {0}: {1} {2}" -f $LASTEXITCODE, $FilePath, $quotedArgs)
+        }
+    }
+    finally {
+        $ErrorActionPreference = $oldErrorActionPreference
+        if ($hadNativePref) {
+            $global:PSNativeCommandUseErrorActionPreference = $oldNativePref
+        }
     }
 }
 
-# Step 6: Run test
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "STEP 6: Running test script" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
+function Ensure-UVInstalled {
+    Refresh-Path
 
-$testFile = Join-Path $projectRoot "manim-test.py"
-if (Test-Path $testFile) {
-    Push-Location $projectRoot
-    Write-Host "Running: uv run python manim-test.py " -ForegroundColor Yellow
-    & uv run python $testFile 2>&1 | ForEach-Object { Write-Host $_ }
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Test completed successfully"
+    if (Test-CommandAvailable 'uv') {
+        $version = & uv --version
+        Write-Ok "uv is available: $version"
+        return
+    }
+
+    Write-Warn 'uv was not found in PATH. Installing uv from the official installer.'
+    Invoke-LoggedCommand -FilePath 'powershell' -Arguments @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command',
+        'irm https://astral.sh/uv/install.ps1 | iex'
+    ) -Description 'Installing uv'
+
+    Refresh-Path
+    if (-not (Test-CommandAvailable 'uv')) {
+        throw 'uv installation completed, but the uv command is still unavailable in PATH.'
+    }
+
+    $version = & uv --version
+    Write-Ok "uv installed successfully: $version"
+}
+
+function Ensure-PythonInstalled {
+    Invoke-LoggedCommand -FilePath 'uv' -Arguments @('python', 'install', $PythonVersion) -Description "Installing Python $PythonVersion through uv"
+}
+
+function Ensure-Venv {
+    $venvPath = Join-Path $script:ProjectRoot '.venv'
+
+    if ($ForceRecreateVenv -and (Test-Path $venvPath)) {
+        Write-Warn 'Removing existing .venv because -ForceRecreateVenv was provided.'
+        Remove-Item -Recurse -Force $venvPath
+    }
+
+    if (-not (Test-Path $venvPath)) {
+        Invoke-LoggedCommand -FilePath 'uv' -Arguments @('init') -Description 'Initializing uv environment'
+        # Invoke-LoggedCommand -FilePath 'uv' -Arguments @('venv') -Description 'Ensuring virtual environment is set up for uv'
+        Invoke-LoggedCommand -FilePath 'uv' -Arguments @('venv', '--python', $PythonVersion, $venvPath) -Description 'Creating virtual environment'
+        Invoke-LoggedCommand -FilePath './.venv/Scripts/activate' -Description 'Activating virtual environment for dependency installation'
     }
     else {
-        Write-Warning-Custom "Test completed with exit code: $LASTEXITCODE"
+        Write-Ok "Virtual environment already exists: $venvPath"
     }
-    Pop-Location
-}
-else {
-    Write-Warning-Custom "Test file not found: $testFile"
 }
 
-Write-Host "`n============================================================" -ForegroundColor $cyan
-Write-Host "ALL STEPS COMPLETED" -ForegroundColor $cyan
-Write-Host "============================================================" -ForegroundColor $cyan
+function Test-PyProjectIsPackageProject {
+    $pyprojectPath = Join-Path $script:ProjectRoot 'pyproject.toml'
+    if (-not (Test-Path $pyprojectPath)) {
+        return $false
+    }
+
+    $content = Get-Content -Path $pyprojectPath -Raw
+    return $content -match '(?m)^\[project\]'
+}
+
+function Sync-Dependencies {
+    Invoke-LoggedCommand -FilePath 'uv' -Arguments @('pip', 'install', 'manim', 'manim-slides', 'pyqt6', 'pyside6') -Description 'Installing fallback dependencies'
+
+}
+
+function Ensure-LaTeXInstalled {
+    if ($SkipLaTeX) {
+        Write-Warn 'Skipping LaTeX checks because -SkipLaTeX was provided.'
+        return
+    }
+
+    $latexCommands = @('latex', 'pdflatex', 'xelatex')
+    $found = $false
+    foreach ($cmd in $latexCommands) {
+        if (Test-CommandAvailable $cmd) {
+            $found = $true
+            break
+        }
+    }
+
+    if ($found) {
+        Write-Ok 'LaTeX commands are available'
+    }
+    else {
+        Write-Warn 'No LaTeX executable was found in PATH. Manim may fail when rendering LaTeX scenes.'
+    }
+}
+
+function Test-BasicToolchain {
+    $pythonExe = Join-Path $script:ProjectRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path $pythonExe)) {
+        throw "Virtual environment Python executable was not found: $pythonExe"
+    }
+
+    Invoke-LoggedCommand -FilePath $pythonExe -Arguments @('--version') -Description 'Checking Python inside virtual environment'
+
+    $manimCheck = @('uv run manim-text.py')
+    Invoke-LoggedCommand -FilePath $pythonExe -Arguments $manimCheck -Description 'Checking whether Manim is importable' -AllowFailure
+}
+function Install-ManimPhysics {
+    $manimPhysicsRepo = 'https://github.com/SirJamesClarkMaxwell/manim-physics.git' 
+    git clone $manimPhysicsRepo 
+    cd .\manim-physics
+    uv pip install -e .
+    cd ..
+}
+$script:ProjectRoot = Get-ProjectRoot
+Initialize-Logging
+
+Write-Info "Script location : $PSScriptRoot"
+Write-Info "Project root    : $script:ProjectRoot"
+Write-Info "Log file        : $script:LogFile"
+Write-Info "Target Python   : $PythonVersion"
+
+Invoke-Stage -Name 'Checking uv' -Action { Ensure-UVInstalled }
+Invoke-Stage -Name 'Installing Python' -Action { Ensure-PythonInstalled }
+Invoke-Stage -Name 'Creating virtual environment' -Action { Ensure-Venv }
+Invoke-Stage -Name 'Installing dependencies' -Action { Sync-Dependencies }
+Invoke-Stage -Name 'manim-physics installation' -Action {Install-ManimPhysics}
+Invoke-Stage -Name 'Ensuring LaTeX is installed' -Action { Ensure-LaTeXInstalled }
+Invoke-Stage -Name 'Running sanity checks' -Action { Test-BasicToolchain }
+
+Write-Host ''
+Write-Ok 'Setup finished successfully.'
+Write-Info 'To activate the environment manually, run:'
+Write-Host (Join-Path $script:ProjectRoot '.venv\Scripts\activate') -ForegroundColor White
