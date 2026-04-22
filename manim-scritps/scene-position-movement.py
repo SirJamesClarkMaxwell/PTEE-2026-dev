@@ -29,6 +29,7 @@ class TransformMatchingCode(TransformMatchingTex):
     def get_mobject_key(mobject: Mobject) -> str:
         return mobject.tex_string
 
+
 class Base(BaseScene):
     default_scene_width = 8
     default_scene_height = 4.5
@@ -243,23 +244,25 @@ class SimplePositioning(Base):
             tokenize.OP: GREY_B,
         }
         direction_names = {"UP", "DOWN", "LEFT", "RIGHT", "UL", "UR", "DL", "DR"}
-        object_names = {"dot", "scene", "plane", "animate"}
+        object_names = {"dot", "scene", "plane", "animate",".","(",")"}
         method_names = {"move_to", "get_center", "get_critical_point", "c2p"}
+
+        code = Text(command, font="Consolas", font_size=24)
 
         tokens = [
             token
             for token in tokenize.generate_tokens(io.StringIO(command).readline)
             if token.string
-            and token.type not in (tokenize.ENCODING, tokenize.ENDMARKER, tokenize.NEWLINE)
+            and token.type
+            not in (tokenize.ENCODING, tokenize.ENDMARKER, tokenize.NEWLINE)
         ]
-        code = Text(command, font="Consolas", font_size=24)
-        match_parts = VGroup()
         previous_token = None
 
-        for token in tokens:
+        for i, token in enumerate(tokens):
             start = token.start[1]
             end = token.end[1]
             color = colors.get(token.type, WHITE)
+
             if token.string in object_names:
                 color = BLUE_B
             elif token.string in method_names:
@@ -270,16 +273,22 @@ class SimplePositioning(Base):
                 color = GREEN_B
 
             code[start:end].set_color(color)
-            token_mobject = VGroup(*code[start:end])
-            token_key = f"{token.type}:{token.string}:{start}"
-            token_mobject.tex_string = token_key
-            for char in token_mobject:
-                char.tex_string = token_key
-            match_parts.add(token_mobject)
-
             previous_token = token
 
-        code.match_parts = match_parts
+        c2p_start = command.find("c2p(")
+        if c2p_start != -1:
+            args_start = c2p_start + len("c2p(")
+            args_end = command.find(")", args_start)
+            print(command, args_start, args_end)
+            print(command[args_start:args_end])
+            code[args_start:args_end-1].set_color(RED)
+            if args_end is not None:
+                code[args_end].set_color(WHITE)
+            comma = command.find(",",c2p_start)
+            code[comma].set_color(WHITE)
+
+        code[-2:].set_color(BLUE_B)
+
         return code
 
     def critical_point_command(self, point_name: str) -> str:
@@ -307,18 +316,17 @@ class SimplePositioning(Base):
         text[0][-3:-1].set_color(RED)
         return text
 
-    def update_command(self, command: Text, next_command_text: str, run_time: float = 1):
+    def update_command(
+        self, command: Text, next_command_text: str, run_time: float = 1
+    ):
         next_command = self.command_label(next_command_text).move_to(command)
-        return TransformMatchingCode(
-            command,
+        return (
+            FadeTransform(command, next_command, run_time=run_time),
             next_command,
-            transform_mismatches=False,
-            fade_transform_mismatches=False,
-            run_time=run_time,
-        ), next_command
+        )
 
     def construct(self) -> None:
-        with self.new_section("Initialize positioning objects",skip_animations=False):
+        with self.new_section("Initialize positioning objects", skip_animations=True):
             scene_box = self.default_scene()
             title = Text("SimplePositioning", font_size=38).next_to(
                 scene_box, UP, MED_SMALL_BUFF
@@ -338,9 +346,11 @@ class SimplePositioning(Base):
             critical_points_map: Dict[str, tuple[str, np.ndarray, str]] = {
                 point_name: (
                     point_name,
-                    point_data[1]
-                    if isinstance(point_data, tuple)
-                    else scene_box.get_corner(point_data),
+                    (
+                        point_data[1]
+                        if isinstance(point_data, tuple)
+                        else scene_box.get_corner(point_data)
+                    ),
                     self.critical_point_command(point_name),
                 )
                 for point_name, point_data in critical_point_directions.items()
@@ -355,9 +365,15 @@ class SimplePositioning(Base):
             point_labels = VGroup(
                 *[
                     self.critical_point_label(
-                        label, position, critical_point_directions[point_name]
-                        if not isinstance(critical_point_directions[point_name], tuple)
-                        else critical_point_directions[point_name][0]
+                        label,
+                        position,
+                        (
+                            critical_point_directions[point_name]
+                            if not isinstance(
+                                critical_point_directions[point_name], tuple
+                            )
+                            else critical_point_directions[point_name][0]
+                        ),
                     )
                     for point_name, (
                         label,
@@ -367,22 +383,20 @@ class SimplePositioning(Base):
                 ]
             )
 
-            moving_dot = Dot(
-                critical_points_map["ORIGIN"][1], radius=0.09, color=RED
-            )
+            moving_dot = Dot(critical_points_map["ORIGIN"][1], radius=0.09, color=RED)
             command = {
-                "mobject": self.command_label(
-                    critical_points_map["ORIGIN"][2]
-                ).next_to(scene_box, DOWN, MED_LARGE_BUFF)
+                "mobject": self.command_label(critical_points_map["ORIGIN"][2]).next_to(
+                    scene_box, DOWN, MED_LARGE_BUFF
+                )
             }
 
-        with self.new_section("Show critical points", skip_animations=False):
+        with self.new_section("Show critical points", skip_animations=True):
             self.play(Create(scene_box), Write(title))
             self.play(FadeIn(point_dots), Write(point_labels), FadeIn(moving_dot))
             self.play(Write(command["mobject"]))
             self.wait_or_slide()
 
-        with self.new_section("Move through critical points", skip_animations=False):
+        with self.new_section("Move through critical points", skip_animations=True):
             critical_point_steps = [
                 "UR",
                 "DR",
@@ -418,7 +432,7 @@ class SimplePositioning(Base):
                 )
             )
 
-        with self.new_section("Show coordinate system", skip_animations=False):
+        with self.new_section("Show coordinate system", skip_animations=True):
             plane = NumberPlane(
                 x_length=self.default_scene_width,
                 y_length=self.default_scene_height,
@@ -432,29 +446,14 @@ class SimplePositioning(Base):
                     "stroke_width": 2,
                     "include_ticks": True,
                 },
-            )
+            ).add_coordinates()
             plane.shift(scene_box.get_center() - plane @ (0, 0, 0))
-            coordinate_labels = VGroup(
-                *[
-                    Text(str(x), font="Consolas", font_size=16).next_to(
-                        plane.c2p(x, 0), DOWN, buff=0.08
-                    )
-                    for x in range(-7, 8)
-                    if x != 0
-                ],
-                *[
-                    Text(str(y), font="Consolas", font_size=16).next_to(
-                        plane.c2p(0, y), LEFT, buff=0.08
-                    )
-                    for y in range(-4, 5)
-                    if y != 0
-                ],
-            )
 
-            self.play(FadeIn(plane), Write(coordinate_labels))
+            self.play(FadeIn(plane))
             self.wait_or_slide()
 
         with self.new_section("Move to coordinates", skip_animations=False):
+
             coordinate_steps = {
                 "origin": (0, 0),
                 "upper right": (2, 1),
@@ -466,6 +465,16 @@ class SimplePositioning(Base):
                 label: (coordinates, self.coordinate_command(*coordinates))
                 for label, coordinates in coordinate_steps.items()
             }
+
+            # Initialize the first coordinate command separately to avoid
+            # a noisy first transition from get_center() to c2p(...).
+            coordinate_items = list(coordinate_map.values())
+            first_coordinates, first_command_text = coordinate_items[0]
+            first_command_animation, first_next_command = self.update_command(
+                command["mobject"], first_command_text, run_time=0.6
+            )
+            self.play(first_command_animation)
+            command["mobject"] = first_next_command
 
             def build_coordinate_animation(step):
                 coordinates, command_text = step
@@ -485,7 +494,7 @@ class SimplePositioning(Base):
 
             self.play_timeline(
                 self.build_timeline(
-                    coordinate_map.values(),
+                    coordinate_items[1:],
                     build_coordinate_animation,
                     step_time=1.2,
                 )
